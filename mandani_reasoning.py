@@ -1,6 +1,11 @@
 from math import inf
 from collections import Counter
 
+
+__author__ = "Stian R. Hanssen"
+
+#Dynamic rule set and membership functions
+#----------------------------------------#
 RULES = [(lambda distance, delta: f_and(triangle(distance, 1.5, 4.5),
                                         triangle(delta, 0.5, 3.5)),
          "None"),
@@ -17,12 +22,14 @@ RULES = [(lambda distance, delta: f_and(triangle(distance, 1.5, 4.5),
          (lambda distance, delta: reverse_grade(distance, 1, 2.5),
          "BrakeHard")]
 
-MEMBERSHIP = [(lambda value: reverse_grade(value, -8, -5), "BrakeHard"),
-              (lambda value: triangle(value, -7, -1), "SlowDown"),
-              (lambda value: triangle(value, -3, 3), "None"),
-              (lambda value: triangle(value, 1, 7), "SpeedUp"),
-              (lambda value: grade(value, 5, 8), "FloorIt")]
+ACTION_FUNCS = [(lambda value, clip=inf: reverse_grade(value, -8, -5, clip), "BrakeHard"),
+                (lambda value, clip=inf: triangle(value, -7, -1, clip), "SlowDown"),
+                (lambda value, clip=inf: triangle(value, -3, 3, clip), "None"),
+                (lambda value, clip=inf: triangle(value, 1, 7, clip), "SpeedUp"),
+                (lambda value, clip=inf: grade(value, 5, 8, clip), "FloorIt")]
 
+#Fuzzy logical operators
+#----------------------#
 def f_and(x, y):
     return min(x, y)
 
@@ -32,68 +39,77 @@ def f_or(x, y):
 def f_not(x):
     return 1.0 - x
 
-def triangle(position, x0, x2, clip=inf):
-    x1 = (x2 + x0) / 2
-    value = 0.0
-    if position >= x0 and position <= x1:
-        value = (position - x0)/(x1 - x0)
-    elif position >= x1 and position <= x2:
-        value = (x2 - position)/(x1 - x0)
-    if value > clip:
+#Mathematical functions for shapes on a graph
+#-------------------------------------------#
+def triangle(x_value, x_start, x_end, clip=inf):
+    x_mid = (x_end + x_start) / 2
+    y_value = 0.0
+    if x_value >= x_start and x_value <= x_mid:
+        y_value = (x_value - x_start)/(x_mid - x_start)
+    elif x_value >= x_mid and x_value <= x_end:
+        y_value = (x_end - x_value)/(x_mid - x_start)
+    if y_value > clip:
         return clip
-    return value
+    return y_value
 
-def grade(position, x0, x1, clip=inf):
-    value = 0.0
-    if position >= x1:
-        value = 1.0
-    elif position <= x0:
+def grade(x_value, x_start, x_end, clip=inf):
+    y_value = 0.0
+    if x_value >= x_end:
+        y_value = 1.0
+    elif x_value <= x_start:
         pass
     else:
-        value = (position - x0) / (x1 - x0)
-    if value > clip:
+        y_value = (x_value - x_start) / (x_end - x_start)
+    if y_value > clip:
         return clip
-    return value
+    return y_value
 
-def reverse_grade(position, x0, x1, clip=inf):
-    value = 1.0 - grade(position, x0, x1, clip)
-    if value > clip:
+def reverse_grade(x_value, x_start, x_end, clip=inf):
+    y_value = 1.0 - grade(x_value, x_start, x_end, clip)
+    if y_value > clip:
         return clip
-    return value
+    return y_value
 
-def centroid(aggreg_values):
-    counted = Counter(aggreg_values).most_common()
+#Functions for calculating the fuzzy logic it self
+#------------------------------------------------#
+def centroid(aggregated_values, first_sample_value):
+    counted = Counter(aggregated_values).most_common()
     top = 0
     bottom = 0
-    for i in range(len(aggreg_values)):
-        top += (i - 10) * aggreg_values[i][0]
-    for val_pair, instances in counted:
-        bottom += val_pair[0] * instances
-    if bottom == 0:
-        data_sum = 1
+    for i in range(len(aggregated_values)):
+        top += (i + first_sample_value) * aggregated_values[i]  # 'sample x value' * 'y_value in action for samnple x value'
+    for value, instances in counted:
+        bottom += value * instances  # 'y value' * 'number of instances of this value'
+    if bottom == 0:  # Avoid dividing by zero, will result in a less accurate answer
+        bottom = 1
     return top / bottom
 
-def get_best_membership(value, aggreg_fuzzy_dict, membership):
-    best = (-inf, "undefined")
-    for func, action in membership:
-        pos = func(value)  # Just used to see if value is in range of action
-        val = aggreg_fuzzy_dict[action]
-        if pos > 0 and val > best[0]:  # If value is in range of this action and is action is better than any previous choices
-            best = (val, action)
+#Finds y value in the aggregated fuzzy set for x position value
+def get_aggregated_value(value, clip_values, action_funcs):
+    best = -inf
+    for func, action in action_funcs:  # Finds highest y value if actons overlap at x position value
+        clip = clip_values[action]
+        val = func(value, clip)
+        if val > best:
+            best = val
     return best
 
-def get_final_action(value, membership):
+#Finds action with the highest y value for given x position value
+def get_action(value, action_funcs):
     best = (-inf, "undefined")
-    for func, action in MEMBERSHIP:
+    for func, action in action_funcs:
         val = func(value)
         if val > best[0]:
             best = (val, action)
     return best[1]
 
-def get_result(distance, delta, rules, membership, samples):
-    aggreg_fuzzy_dict = {action: func(distance, delta) for func, action in rules}
-    aggreg_values = [get_best_membership(sample, aggreg_fuzzy_dict, membership) for sample in samples]
-    centered_value = centroid(aggreg_values)
-    return centered_value, get_final_action(centered_value, membership)
+#Executes the mandani reasoning based on the given values, set of rules, membership functions and sampling of the aggregated fuzzy set
+def get_result(distance, delta, rules, action_funcs, samples):
+    clip_values = {action: func(distance, delta) for func, action in rules}
+    aggregated_values = [get_aggregated_value(sample, clip_values, action_funcs) for sample in samples]
+    centered_value = centroid(aggregated_values, samples[0])
+    return centered_value, get_action(centered_value, action_funcs)
 
-print(get_result(3.7, 1.2, RULES, MEMBERSHIP, range(-10, 11)))
+print(get_result(3.7, 1.2, RULES, ACTION_FUNCS, range(-10, 11)))
+#Output:
+#(-0.3529411764705879, 'None')
